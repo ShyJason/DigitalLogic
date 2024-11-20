@@ -1,0 +1,12 @@
+# 忽略所有文件和文件夹
+/*
+
+# 取消忽略特定的文件和文件夹
+!digitLogic_project.cache/
+!docs/
+!digitLogic_project.hw/
+!digitLogic_project.srcs/
+!digitLogic_project.ip_user_files/
+!digitLogic_project.sim/
+!.gitignore
+!digitLogic_project.xpr
