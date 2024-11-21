@@ -21,25 +21,30 @@
 
 
 module data_initializer (
-    input wire clk,
-    input wire rst_n,
-    input wire init_trigger,
-    output reg [31:0] data_out [3:0]  // 输出4个32位寄存器
+    input wire clk,                   // Clock signal
+    input wire rst_n,                 // Reset signal (active low)
+    input wire init_trigger,          // Initialization trigger signal
+    output reg [31:0] data_out [3:0]  // Output: 4 registers, each 32-bit wide
 );
 
+    // Integer variable for the loop
     integer i;
 
+    // Sequential logic for initialization
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
+            // Asynchronous reset: set all registers in the array to 0
             for (i = 0; i < 4; i = i + 1) begin
-                data_out[i] <= 32'b0;
+                data_out[i] <= 32'b0; // Clear each 32-bit register
             end
         end else if (init_trigger) begin
+            // On init_trigger: assign default values to the registers
             for (i = 0; i < 4; i = i + 1) begin
-                data_out[i] <= 32'h12345678 + i; // 每个寄存器设置不同默认值
+                data_out[i] <= 32'h12345678 + i; // Set different values for each register
             end
         end
     end
 
 endmodule
+
 
