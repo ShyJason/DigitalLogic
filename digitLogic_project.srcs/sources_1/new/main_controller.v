@@ -21,79 +21,117 @@
 
 
 module main_controller (
-    input wire clk,               // ʱ���ź�
-    input wire rst_n,             // ��λ�źţ��͵�ƽ��Ч��
-    input wire power_button,      // ���ػ�����
-    input wire mode_select,       // ģʽѡ�񰴼�
-    output reg [2:0] mode,        // ��ǰģʽ���
-    output reg system_on          // ϵͳ����״̬
+    input wire clk,               // Clock signal
+    input wire rst_n,             // Reset signal (active low)
+    input wire power_button,      // Power button input
+    input wire mode_select,       // Mode select button input
+    output reg [2:0] mode,        // Current mode output
+    output reg system_on          // System power state (on/off)
 );
 
-    // ״̬����
-    localparam OFF      = 3'b000; // ϵͳ�ػ�״̬
-    localparam STANDBY  = 3'b001; // ����ģʽ
-    localparam CALC     = 3'b010; // ����ģʽ
-    localparam LEARN    = 3'b011; // ѧϰģʽ
-    localparam COMPETE  = 3'b100; // ����ģʽ
-    localparam DEMO     = 3'b101; // ��ʾģʽ
+    // State encoding
+    localparam OFF      = 3'b000; // System OFF state
+    localparam STANDBY  = 3'b001; // Standby mode
+    localparam CALC     = 3'b010; // Calculation mode
+    localparam LEARN    = 3'b011; // Learning mode
+    localparam COMPETE  = 3'b100; // Competition mode
+    localparam DEMO     = 3'b101; // Demonstration mode
 
-    // ���ػ��߼�
-    reg [23:0] power_counter;
-    reg power_pressed;
+    // State registers
+    reg [2:0] state, next_state; // Current state and next state
 
-// ���ػ��߼�����
-always @(posedge clk or negedge rst_n) begin
-    if (!rst_n) begin
-        power_counter <= 0;
-        power_pressed <= 0;
-        system_on <= 0;
-    end else if (power_button) begin
-        if (system_on) begin
-            power_counter <= power_counter + 1;
-            if (power_counter >= 24'hFFFFFF) begin
-                system_on <= 0; // �����ػ�
-                power_counter <= 0; // ���ü�����
-            end
+    // Sequential block: Update the current state on the rising edge of the clock
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            state <= OFF;        // Reset: Initialize to OFF state
+            system_on <= 0;      // System is OFF after reset
         end else begin
-            power_counter <= power_counter + 1;
-            if (power_counter < 24'h10000) begin
-                system_on <= 1; // �̰�����
+            state <= next_state; // Transition to the next state
+        end
+    end
+
+    // Combinational block: Determine the next state based on current state and inputs
+    always @(*) begin
+        // Default: Remain in the current state
+        next_state = state;
+
+        // State transition logic
+        case (state)
+            OFF: begin
+                if (power_button) begin
+                    next_state = STANDBY; // Short press: Turn ON and enter STANDBY
+                    system_on = 1;       // System is now ON
+                end else begin
+                    system_on = 0;       // System remains OFF
+                end
             end
-        end
-    end else begin
-        power_counter <= 0; // �����ͷ�ʱ���ü�����
-        power_pressed <= 0;
+
+            STANDBY: begin
+                if (!power_button) begin
+                    if (mode_select) begin
+                        next_state = CALC; // Mode select: Go to Calculation mode
+                    end
+                end else if (power_button) begin
+                    next_state = OFF;     // Long press: Turn OFF system
+                    system_on = 0;        // System OFF
+                end
+            end
+
+            CALC: begin
+                if (mode_select) begin
+                    next_state = LEARN;   // Mode select: Go to Learning mode
+                end else if (power_button) begin
+                    next_state = OFF;     // Long press: Turn OFF system
+                    system_on = 0;
+                end
+            end
+
+            LEARN: begin
+                if (mode_select) begin
+                    next_state = COMPETE; // Mode select: Go to Competition mode
+                end else if (power_button) begin
+                    next_state = OFF;     // Long press: Turn OFF system
+                    system_on = 0;
+                end
+            end
+
+            COMPETE: begin
+                if (mode_select) begin
+                    next_state = DEMO;    // Mode select: Go to Demonstration mode
+                end else if (power_button) begin
+                    next_state = OFF;     // Long press: Turn OFF system
+                    system_on = 0;
+                end
+            end
+
+            DEMO: begin
+                if (mode_select) begin
+                    next_state = STANDBY; // Mode select: Return to Standby mode
+                end else if (power_button) begin
+                    next_state = OFF;     // Long press: Turn OFF system
+                    system_on = 0;
+                end
+            end
+
+            default: begin
+                next_state = OFF;         // Default: Go to OFF state
+                system_on = 0;            // Ensure system is OFF
+            end
+        endcase
     end
-end
 
-
-    // ģʽ�л��߼�
+    // Output logic: Update the mode based on the current state
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            mode <= OFF;
-        end else if (!system_on) begin
-            mode <= OFF; // ϵͳ�ػ�
-        end else if (system_on && mode_select) begin
-            case (mode)
-                STANDBY: mode <= CALC;    // ���� -> ����
-                CALC:    mode <= LEARN;   // ���� -> ѧϰ
-                LEARN:   mode <= COMPETE; // ѧϰ -> ����
-                COMPETE: mode <= DEMO;    // ���� -> ��ʾ
-                DEMO:    mode <= STANDBY; // ��ʾ -> ����
-                default: mode <= STANDBY;
-            endcase
-        end
-    end
-
-    // ��λ�߼�
-    always @(posedge clk or negedge rst_n) begin
-        if (!rst_n) begin
-            mode <= OFF;
-            system_on <= 0;
+            mode <= OFF; // Reset: Set mode to OFF
+        end else begin
+            mode <= state; // Mode equals the current state
         end
     end
 
 endmodule
+
+
 
 
 
