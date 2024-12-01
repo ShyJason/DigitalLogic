@@ -25,3 +25,10 @@ The team's development plan is as follows:
 The input and output devices used in the EGO1 development board are as follows:
 
 ![EGO1 Devices](images/ego1_devices.svg)
+
+## UI Design
+
+我们准备使用VGA显示器来显示我们的UI界面，我们初步的UI界面设计如下：
+
+![UI Design](vga/vga_design.svg)
+

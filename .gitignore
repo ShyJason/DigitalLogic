@@ -11,3 +11,5 @@
 !.gitignore
 !digitLogic_project.xpr
 !images/
+!keyboard/
+!vga/
