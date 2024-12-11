@@ -15,6 +15,10 @@
 `define correct 2'b01
 `define wrong 2'b10
 
+// UART constant
+`define IDLE 4'd0
+`define RECEIVE 4'd1
+`define RECEIVE_END 4'd2
 
 // VGA constant
 `define H_SYNC_PULSE 10'd96
