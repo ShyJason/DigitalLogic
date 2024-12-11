@@ -1,86 +1,776 @@
+`include "vga_char_params.vh"
+`include "Constant.v"
+
 module vga_top (
     input wire clk,
     input wire rst,
-    input wire [4:0] game_mode, // 模式选择
-    output wire vga_hsync,
-    output wire vga_vsync,
-    output wire [15:0] rgb
+    input wire [14:0] timingup, // 4位0-9999正计时 单位:s
+    input wire [14:0] timingdown, // 4位0-9999倒计时 单位:s
+    input wire script[7:0], // 8位输入器
+    
+    input wire [7:0] led_1, // 8位led_1
+    input wire [7:0] led_2, // 8位led_2
+    input wire [1:0] is_correct, // 2位正确性
+
+    ///七段数码管///
+    input wire [7:0] segment0,
+    input wire [7:0] segment1,
+    input wire [7:0] segment2,
+    input wire [7:0] segment3,
+    input wire [7:0] segment4,
+    input wire [7:0] segment5,
+    input wire [7:0] segment6,
+    input wire [7:0] segment7,
+
+    
+    input wire [1:0] state, // 2位状态,开关机和待定
+    input wire [1:0] game_mode, // 模式选择
+    output hsync,   // line synchronization signal
+    output vsync,   // vertical synchronization signal
+    output reg [3:0] red,
+    output reg [3:0] green,
+    output reg [3:0] blue
 );
 
     wire [9:0] pix_x;
     wire [9:0] pix_y;
-    wire vga_clk;
+    wire vga_clk; //25MHz
     wire [15:0] pix_data;
 
-    // 时钟分频器实例
-    clk_div clk_div_inst(
-        .clk(clk),
-        .rst(rst),
-        .clk_out(vga_clk)
+    clk_wiz_0 clk_inst(   // clk_wiz_0 used ip core
+        .clk_in1(clk),
+        .clk_out1(vga_clk)
     );
 
-    // VGA控制器实例
-    vga_640x480 vga_controller(
-        .pclk(vga_clk),
-        .reset(rst),
-        .hsync(vga_hsync),
-        .vsync(vga_vsync),
-        .valid(),
-        .h_cnt(pix_x),
-        .v_cnt(pix_y)
-    );
+    // horizontal counter
+    reg [9:0] hc;
+    always @(posedge vga_clk) begin
+        if (~rst_n) hc <= 0;
+        else if (hc == `H_LINE_PERIOD - 1) hc <= 0;
+        else hc <= hc + 1;
+    end
 
-    // 根据game_mode实例化不同的vga_display_mod模块
-    generate
-        if (game_mode[0]) begin : mode0
-            vga_display_mod0 vga_display_mod_inst(
-                .pclk(vga_clk),
-                .rst(rst),
-                .pix_x(pix_x),
-                .pix_y(pix_y),
-                .en(game_mode[0]),
-                .pix_data(pix_data)
-            );
-        end else if (game_mode[1]) begin : mode1
-            vga_display_mod1 vga_display_mod_inst(
-                .pclk(vga_clk),
-                .rst(rst),
-                .pix_x(pix_x),
-                .pix_y(pix_y),
-                .en(game_mode[1]),
-                .pix_data(pix_data)
-            );
-        end else if (game_mode[2]) begin : mode2
-            vga_display_mod2 vga_display_mod_inst(
-                .pclk(vga_clk),
-                .rst(rst),
-                .pix_x(pix_x),
-                .pix_y(pix_y),
-                .en(game_mode[2]),
-                .pix_data(pix_data)
-            );
-        end else if (game_mode[3]) begin : mode3
-            vga_display_mod3 vga_display_mod_inst(
-                .pclk(vga_clk),
-                .rst(rst),
-                .pix_x(pix_x),
-                .pix_y(pix_y),
-                .en(game_mode[3]),
-                .pix_data(pix_data)
-            );
-        end else if (game_mode[4]) begin : mode4
-            vga_display_mod4 vga_display_mod_inst(
-                .pclk(vga_clk),
-                .rst(rst),
-                .pix_x(pix_x),
-                .pix_y(pix_y),
-                .en(game_mode[4]),
-                .pix_data(pix_data)
-            );
+    // vertical counter
+    reg [9:0] vc;
+    always @(posedge vga_clk) begin
+        if (~rst_n) vc <= 0;
+        else if (vc == `V_FRAME_PERIOD - 1) vc <= 0;
+        else if (hc == `H_LINE_PERIOD - 1) vc <= vc + 1;
+        else vc <= vc;
+    end
+
+    wire [9:0] hc0, vc0;
+    assign hsync = (hc < `H_SYNC_PULSE) ? 0 : 1;
+    assign vsync = (vc < `V_SYNC_PULSE) ? 0 : 1;
+    assign hc0 = hc - `H_SYNC_PULSE - `H_BACK_PORCH;
+    assign vc0 = vc - `V_SYNC_PULSE - `V_BACK_PORCH;
+
+    wire active;  // is the point active
+    assign active = (hc >= `H_SYNC_PULSE + `H_BACK_PORCH) &&
+                    (hc < `H_SYNC_PULSE + `H_BACK_PORCH + `H_ACTIVE_TIME) &&
+                    (vc >= `V_SYNC_PULSE + `V_BACK_PORCH) &&
+                    (vc < `V_SYNC_PULSE + `V_BACK_PORCH + `V_ACTIVE_TIME) ? 1 : 0;
+
+    reg [10:0] idx;
+    
+    ///bcd内容转换///
+    wire [1023:0] bcd_0;
+    wire [1023:0] bcd_1;
+    wire [1023:0] bcd_2;
+    wire [1023:0] bcd_3;
+    wire [1023:0] bcd_4;
+    wire [1023:0] bcd_5;
+    wire [1023:0] bcd_6;
+    wire [1023:0] bcd_7;
+    vga_decoder_8 vga_decoder_8_inst_0(
+        .seg(segment0),
+        .vga(bcd_0)
+    );
+    vga_decoder_8 vga_decoder_8_inst_1(
+        .seg(segment1),
+        .vga(bcd_1)
+    );
+    vga_decoder_8 vga_decoder_8_inst_2(
+        .seg(segment2),
+        .vga(bcd_2)
+    );
+    vga_decoder_8 vga_decoder_8_inst_3(
+        .seg(segment3),
+        .vga(bcd_3)
+    );
+    vga_decoder_8 vga_decoder_8_inst_4(
+        .seg(segment4),
+        .vga(bcd_4)
+    );
+    vga_decoder_8 vga_decoder_8_inst_5(
+        .seg(segment5),
+        .vga(bcd_5)
+    );
+    vga_decoder_8 vga_decoder_8_inst_6(
+        .seg(segment6),
+        .vga(bcd_6)
+    );
+    vga_decoder_8 vga_decoder_8_inst_7(
+        .seg(segment7),
+        .vga(bcd_7)
+    );
+    
+
+
+    always @(*) begin
+        if (~rst_n) begin
+            red = 0;
+            green = 0;
+            blue = 0;
         end
-    endgenerate
+        else if (active) begin
+            ///正计时///
+            if (hc0 >= 96 + 0*`char_width && hc0 < 96 + 1*`char_width && vc0 >= 32 && vc0 < 32 + `char_width &&game_mode==JingSai) begin
+                idx = hc0 - 96 + 32 * (vc0 - 32);
+                case (timingup / 1000) //正计时千位
+                    0: begin
+                        if (num_zero[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    1: begin
+                        if (num_one[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    2: begin
+                        if (num_two[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    3: begin
+                        if (num_three[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    4: begin
+                        if (num_four[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    5: begin
+                        if (num_five[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    6: begin
+                        if (num_six[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    7: begin
+                        if (num_seven[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    8: begin
+                        if (num_eight[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    9: begin
+                        if (num_nine[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    default: begin
+                        {red, green, blue} = BLACK;
+                    end
+                endcase
+            end
+            else if (hc0 >= 96 + 1*`char_width && hc0 < 96 + 2*`char_width && vc0 >= 32 && vc0 < 32 + `char_width &&game_mode==JingSai) begin
+                idx = hc0 - 96 - `char_width + 32 * (vc0 - 32);
+                case (timingup % 1000 / 100) //正计时百位
+                    0: begin
+                        if (num_zero[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    1: begin
+                        if (num_one[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    2: begin
+                        if (num_two[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    3: begin
+                        if (num_three[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    4: begin
+                        if (num_four[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    5: begin
+                        if (num_five[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    6: begin
+                        if (num_six[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    7: begin
+                        if (num_seven[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    8: begin
+                        if (num_eight[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    9: begin
+                        if (num_nine[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    default: begin
+                        {red, green, blue} = BLACK;
+                    end
+                endcase
+            end
+            else if (hc0 >= 96 + 2*`char_width && hc0 < 96 + 3*`char_width && vc0 >= 32 && vc0 < 32 + `char_width &&game_mode==JingSai) begin
+                idx = hc0 - 96 - 2*`char_width + 32 * (vc0 - 32);
+                case (timingup % 100 / 10) //正计时十位
+                    0: begin
+                        if (num_zero[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    1: begin
+                        if (num_one[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    2: begin
+                        if (num_two[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    3: begin
+                        if (num_three[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    4: begin
+                        if (num_four[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    5: begin
+                        if (num_five[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    6: begin
+                        if (num_six[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    7: begin
+                        if (num_seven[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    8: begin
+                        if (num_eight[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    9: begin
+                        if (num_nine[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    default: begin
+                        {red, green, blue} = BLACK;
+                    end
+                endcase
+            end
+            else if (hc0 >= 96 + 0*`char_width && hc0 < 96 + 1*`char_width && vc0 >= 32 && vc0 < 32 + `char_width &&game_mode==JingSai) begin
+                idx = hc0 - 96 - 3*`char_width + 32 * (vc0 - 32);
+                case (timingup % 10) //正计时个位
+                    0: begin
+                        if (num_zero[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    1: begin
+                        if (num_one[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    2: begin
+                        if (num_two[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    3: begin
+                        if (num_three[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    4: begin
+                        if (num_four[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    5: begin
+                        if (num_five[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    6: begin
+                        if (num_six[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    7: begin
+                        if (num_seven[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    8: begin
+                        if (num_eight[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    9: begin
+                        if (num_nine[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    default: begin
+                        {red, green, blue} = BLACK;
+                    end
+                endcase
+            end
+            ///倒计时///
+            else if (hc0 >= 256 + 0*`char_width && hc0 < 256 + 1*`char_width && vc0 >= 32 && vc0 < 32 + `char_width &&game_mode==JingSai) begin
+                idx = hc0 - 256 + 32 * (vc0 - 32);
+                case (timingdown / 1000) //倒计时千位
+                    0: begin
+                        if (num_zero[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    1: begin
+                        if (num_one[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    2: begin
+                        if (num_two[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    3: begin
+                        if (num_three[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    4: begin
+                        if (num_four[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    5: begin
+                        if (num_five[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    6: begin
+                        if (num_six[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    7: begin
+                        if (num_seven[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    8: begin
+                        if (num_eight[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    9: begin
+                        if (num_nine[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    default: begin
+                        {red, green, blue} = BLACK;
+                    end
+                endcase
+            end
+            else if (hc0 >= 256 + 1*`char_width && hc0 < 256 + 2*`char_width && vc0 >= 32 && vc0 < 32 + `char_width &&game_mode==JingSai) begin
+                idx = hc0 - 256 - `char_width + 32 * (vc0 - 32);
+                case (timingdown % 1000 / 100) //倒计时百位
+                    0: begin
+                        if (num_zero[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    1: begin
+                        if (num_one[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    2: begin
+                        if (num_two[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    3: begin
+                        if (num_three[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    4: begin
+                        if (num_four[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    5: begin
+                        if (num_five[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    6: begin
+                        if (num_six[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    7: begin
+                        if (num_seven[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    8: begin
+                        if (num_eight[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    9: begin
+                        if (num_nine[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    default: begin
+                        {red, green, blue} = BLACK;
+                    end
+                endcase
+            end
+            else if (hc0 >= 256 + 2*`char_width && hc0 < 256 + 3*`char_width && vc0 >= 32 && vc0 < 32 + `char_width &&game_mode==JingSai) begin
+                idx = hc0 - 256 - 2*`char_width + 32 * (vc0 - 32);
+                case (timingdown % 100 / 10) //倒计时十位
+                    0: begin
+                        if (num_zero[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    1: begin
+                        if (num_one[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    2: begin
+                        if (num_two[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    3: begin
+                        if (num_three[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    4: begin
+                        if (num_four[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    5: begin
+                        if (num_five[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    6: begin
+                        if (num_six[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    7: begin
+                        if (num_seven[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    8: begin
+                        if (num_eight[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    9: begin
+                        if (num_nine[idx] == 1) {red ,green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    default: begin
+                        {red, green, blue} = BLACK;
+                    end
+                endcase
+            end
+            else if (hc0 >= 256 + 0*`char_width && hc0 < 256 + 1*`char_width && vc0 >= 32 && vc0 < 32 + `char_width &&game_mode==JingSai) begin
+                idx = hc0 - 256 - 3*`char_width + 32 * (vc0 - 32);
+                case (timingdown % 10) //倒计时个位
+                    0: begin
+                        if (num_zero[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    1: begin
+                        if (num_one[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    2: begin
+                        if (num_two[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    3: begin
+                        if (num_three[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    4: begin
+                        if (num_four[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    5: begin
+                        if (num_five[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    6: begin
+                        if (num_six[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    7: begin
+                        if (num_seven[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    8: begin
+                        if (num_eight[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    9: begin
+                        if (num_nine[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    default: begin
+                        {red, green, blue} = BLACK;
+                    end
+                endcase
+            end
+            ///模式显示///
+            else if (hc0 >= 480 + 0*`char_width && hc0 < 480 + 1*`char_width && vc0 >= 32 && vc0 < 32 + `char_width) begin
+                idx = hc0 - 480 + 32 * (vc0 - 32);
+                if (state==stand_by)begin
+                    if (char_dai[idx] == 1) {red, green, blue} = WHITE;
+                    else {red, green, blue} = BLACK;
+                end
+                else if (state=run_mode) begin
+                    if (game_mode ==JiSuan) begin
+                        if (char_ji[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    else if (game_mode ==XueXi) begin
+                        if (char_xue[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    else if (game_mode ==JingSai) begin
+                        if (char_jing[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    else if (game_mode ==YanShi) begin
+                        if (char_yan[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    else begin
+                        {red, green, blue} = BLACK;
+                    end
+                end
+                else begin
+                    if (char_guan[idx] == 1) {red, green, blue} = WHITE;
+                    else {red, green, blue} = BLACK;
+                end
+            end
+            else if (hc0 >= 480 + 1*`char_width && hc0 < 480 + 2*`char_width && vc0 >= 32 && vc0 < 32 + `char_width) begin
+                idx = hc0 - 480 -`char_width + 32 * (vc0 - 32);
+                if (state==stand_by) begin
+                    if(char_ding[idx] == 1) {red, green, blue} = WHITE;
+                    else {red, green, blue} = BLACK;
+                end
+                else if (state==run_mode) begin
+                    if (game_mode==JiSuan) begin
+                        if(char_suan[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    else if (game_mode==XueXi) begin
+                        if(char_xi[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    else if (game_mode==JingSai) begin
+                        if(char_sai[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    else if (game_mode==YanShi) begin
+                        if(char_shi2[idx] == 1) {red, green, blue} = WHITE;
+                        else {red, green, blue} = BLACK;
+                    end
+                    else begin
+                        {red, green, blue} = BLACK;
+                    end
+                end
+                else begin
+                    if(char_ji2[idx] == 1) {red, green, blue} = WHITE;
+                    else {red, green, blue} = BLACK;
+                end
+            end
+            else if (hc0 >= 480 + 2*`char_width && hc0 < 480 + 3*`char_width && vc0 >= 32 && vc0 < 32 + `char_width) begin
+                idx = hc0 - 480 - 2*`char_width + 32 * (vc0 - 32);
+                if (char_mo[idx] == 1) {red, green, blue} = WHITE;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 480 + 3*`char_width && hc0 < 480 + 4*`char_width && vc0 >= 32 && vc0 < 32 + `char_width) begin
+                idx = hc0 - 480 - 3*`char_width + 32 * (vc0 - 32);
+                if (char_shi[idx] == 1) {red, green, blue} = WHITE;
+                else {red, green, blue} = BLACK;
+            end
+            ///八位输入器///
+            else if (hc0 >= 96 + 0*`char_width && hc0<96 + 1*`char_width && vc0 >= 128 && vc0 < 128 + `char_width) begin
+                idx = hc0 - 96 + 32 * (vc0 - 128);
+                if (script[idx] == 1) {red, green, blue} = GREEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 1*`char_width && hc0<96 + 2*`char_width && vc0 >= 128 && vc0 < 128 + `char_width) begin
+                idx = hc0 - 96 - `char_width + 32 * (vc0 - 128);
+                if (script[idx] == 1) {red, green, blue} = GREEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 2*`char_width && hc0<96 + 3*`char_width && vc0 >= 128 && vc0 < 128 + `char_width) begin
+                idx = hc0 - 96 - 2*`char_width + 32 * (vc0 - 128);
+                if (script[idx] == 1) {red, green, blue} = GREEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 3*`char_width && hc0<96 + 4*`char_width && vc0 >= 128 && vc0 < 128 + `char_width) begin
+                idx = hc0 - 96 - 3*`char_width + 32 * (vc0 - 128);
+                if (script[idx] == 1) {red, green, blue} = GREEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 4*`char_width && hc0<96 + 5*`char_width && vc0 >= 128 && vc0 < 128 + `char_width) begin
+                idx = hc0 - 96 - 4*`char_width + 32 * (vc0 - 128);
+                if (script[idx] == 1) {red, green, blue} =GREEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 5*`char_width && hc0<96 + 6*`char_width && vc0 >= 128 && vc0 < 128 + `char_width) begin
+                idx = hc0 - 96 - 5*`char_width + 32 * (vc0 - 128);
+                if (script[idx] == 1) {red, green, blue} = GREEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 6*`char_width && hc0<96 + 7*`char_width && vc0 >= 128 && vc0 < 128 + `char_width) begin
+                idx = hc0 - 96 - 6*`char_width + 32 * (vc0 - 128);
+                if (script[idx] == 1) {red, green, blue} = GREEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 7*`char_width && hc0<96 + 8*`char_width && vc0 >= 128 && vc0 < 128 + `char_width) begin
+                idx = hc0 - 96 - 7*`char_width + 32 * (vc0 - 128);
+                if (script[idx] == 1) {red, green, blue} = GREEN;
+                else {red, green, blue} = BLACK;
+            end
+            ///八位led_1///
+            else if (hc0 >= 96 + 0*`char_width && hc0<96 + 1*`char_width && vc0 >= 256 && vc0 < 256 + `char_width) begin
+                idx = hc0 - 96 + 32 * (vc0 - 256);
+                if (led_1[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 1*`char_width && hc0<96 + 2*`char_width && vc0 >= 256 && vc0 < 256 + `char_width) begin
+                idx = hc0 - 96 - `char_width + 32 * (vc0 - 256);
+                if (led_1[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 2*`char_width && hc0<96 + 3*`char_width && vc0 >= 256 && vc0 < 256 + `char_width) begin
+                idx = hc0 - 96 - 2*`char_width + 32 * (vc0 - 256);
+                if (led_1[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 3*`char_width && hc0<96 + 4*`char_width && vc0 >= 256 && vc0 < 256 + `char_width) begin
+                idx = hc0 - 96 - 3*`char_width + 32 * (vc0 - 256);
+                if (led_1[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 4*`char_width && hc0<96 + 5*`char_width && vc0 >= 256 && vc0 < 256 + `char_width) begin
+                idx = hc0 - 96 - 4*`char_width + 32 * (vc0 - 256);
+                if (led_1[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 5*`char_width && hc0<96 + 6*`char_width && vc0 >= 256 && vc0 < 256 + `char_width) begin
+                idx = hc0 - 96 - 5*`char_width + 32 * (vc0 - 256);
+                if (led_1[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 6*`char_width && hc0<96 + 7*`char_width && vc0 >= 256 && vc0 < 256 + `char_width) begin
+                idx = hc0 - 96 - 6*`char_width + 32 * (vc0 - 256);
+                if (led_1[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 7*`char_width && hc0<96 + 8*`char_width && vc0 >= 256 && vc0 < 256 + `char_width) begin
+                idx = hc0 - 96 - 7*`char_width + 32 * (vc0 - 256);
+                if (led_1[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            ///8位led_2///
+            else if (hc0 >= 96 + 0*`char_width && hc0<96 + 1*`char_width && vc0 >= 320 && vc0 < 320 + `char_width) begin
+                idx = hc0 - 96 + 32 * (vc0 - 320);
+                if (led_2[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 1*`char_width && hc0<96 + 2*`char_width && vc0 >= 320 && vc0 < 320 + `char_width) begin
+                idx = hc0 - 96 - `char_width + 32 * (vc0 - 320);
+                if (led_2[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 2*`char_width && hc0<96 + 3*`char_width && vc0 >= 320 && vc0 < 320 + `char_width) begin
+                idx = hc0 - 96 - 2*`char_width + 32 * (vc0 - 320);
+                if (led_2[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 3*`char_width && hc0<96 + 4*`char_width && vc0 >= 320 && vc0 < 320 + `char_width) begin
+                idx = hc0 - 96 - 3*`char_width + 32 * (vc0 - 320);
+                if (led_2[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 4*`char_width && hc0<96 + 5*`char_width && vc0 >= 320 && vc0 < 320 + `char_width) begin
+                idx = hc0 - 96 - 4*`char_width + 32 * (vc0 - 320);
+                if (led_2[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 5*`char_width && hc0<96 + 6*`char_width && vc0 >= 320 && vc0 < 320 + `char_width) begin
+                idx = hc0 - 96 - 5*`char_width + 32 * (vc0 - 320);
+                if (led_2[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 6*`char_width && hc0<96 + 7*`char_width && vc0 >= 320 && vc0 < 320 + `char_width) begin
+                idx = hc0 - 96 - 6*`char_width + 32 * (vc0 - 320);
+                if (led_2[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 7*`char_width && hc0<96 + 8*`char_width && vc0 >= 320 && vc0 < 320 + `char_width) begin
+                idx = hc0 - 96 - 7*`char_width + 32 * (vc0 - 320);
+                if (led_2[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            ///8位BCD///
+            else if (hc0 >= 96 + 0*`char_width && hc0<96 + 1*`char_width && vc0 >= 384 && vc0 < 384 + `char_width) begin
+                idx = hc0 - 96 + 32 * (vc0 - 384);
+                if (bcd_0[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 1*`char_width && hc0<96 + 2*`char_width && vc0 >= 384 && vc0 < 384 + `char_width) begin
+                idx = hc0 - 96 - `char_width + 32 * (vc0 - 384);
+                if (bcd_1[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 2*`char_width && hc0<96 + 3*`char_width && vc0 >= 384 && vc0 < 384 + `char_width) begin
+                idx = hc0 - 96 - 2*`char_width + 32 * (vc0 - 384);
+                if (bcd_2[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 3*`char_width && hc0<96 + 4*`char_width && vc0 >= 384 && vc0 < 384 + `char_width) begin
+                idx = hc0 - 96 - 3*`char_width + 32 * (vc0 - 384);
+                if (bcd_3[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 4*`char_width && hc0<96 + 5*`char_width && vc0 >= 384 && vc0 < 384 + `char_width) begin
+                idx = hc0 - 96 - 4*`char_width + 32 * (vc0 - 384);
+                if (bcd_4[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 5*`char_width && hc0<96 + 6*`char_width && vc0 >= 384 && vc0 < 384 + `char_width) begin
+                idx = hc0 - 96 - 5*`char_width + 32 * (vc0 - 384);
+                if (bcd_5[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 6*`char_width && hc0<96 + 7*`char_width && vc0 >= 384 && vc0 < 384 + `char_width) begin
+                idx = hc0 - 96 - 6*`char_width + 32 * (vc0 - 384);
+                if (bcd_6[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
+            else if (hc0 >= 96 + 7*`char_width && hc0<96 + 8*`char_width && vc0 >= 384 && vc0 < 384 + `char_width) begin
+                idx = hc0 - 96 - 7*`char_width + 32 * (vc0 - 384);
+                if (bcd_7[idx] == 1) {red, green, blue} = GOLDEN;
+                else {red, green, blue} = BLACK;
+            end
 
-    // 将pix_data连接到rgb输出
-    assign rgb = pix_data;
+            ///对错///
+            else if (hc0 >= 96 + 0*`char_width && hc0<96 + 1*`char_width && vc0 >= 96 && vc0 < 96 + `char_width) begin
+                idx = hc0 - 96 + 32 * (vc0 - 96);
+                if(is_correct==correct) begin
+                    if(char_dui[idx] == 1) {red, green, blue} = GREEN;
+                    else {red, green, blue} = BLACK;
+                end
+                else begin
+                    if(char_cuo[idx] == 1) {red, green, blue} = RED;
+                    else {red, green, blue} = BLACK;
+                end
+            end
+            ///defult///
+            else begin
+                {red, green, blue} = BLACK;
+            end
+        end
+        else begin
+            {red, green, blue} = BLACK;
+        end
+    end
+            
 
 endmodule

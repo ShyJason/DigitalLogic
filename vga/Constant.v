@@ -1,9 +1,14 @@
+//run mode
+`define power_off=2'b00
+`define stand_by=2'b01
+`define run_mode=2'b10
+
+
 //game_mode constant
-`define DaiDing 5'b00001
-`define JiSuan 5'b00010
-`define XueXi 5'b00100
-`define JingSai 5'b01000
-`define YanShi 5'b10000
+`define calc_mode 2'b00
+`define learn_mode 2'b01
+`define competition_mode 2'b10
+`define demonstration_mode 2'b11
 
 //correct constant
 `define unjudge 2'b00
